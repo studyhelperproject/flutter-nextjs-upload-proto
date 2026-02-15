@@ -1,26 +1,41 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { supabase } from '@/utils/supabase/client'
+import { useState, useEffect, Suspense } from 'react'
 import Image from "next/image";
+import { useSearchParams } from 'next/navigation'
 
-export default function Home() {
-  const [user, setUser] = useState<any>(null)
+function UploadContent() {
+  const searchParams = useSearchParams()
+  // We expect the URL to be passed as 'upload_url' parameter
+  // Example: /?upload_url=https://...
+  const [uploadUrl, setUploadUrl] = useState<string | null>(null)
+
   const [uploading, setUploading] = useState(false)
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
-  // For debugging, status message
   const [status, setStatus] = useState<string>('')
+  const [isSuccess, setIsSuccess] = useState(false)
 
   useEffect(() => {
-    const getUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      setUser(user)
+    // Check query params first
+    const urlFromQuery = searchParams.get('upload_url')
+    if (urlFromQuery) {
+      setUploadUrl(urlFromQuery)
+    } else {
+      // Fallback: Check hash params (if FlutterFlow sends it there)
+      const hash = window.location.hash.substring(1)
+      const params = new URLSearchParams(hash)
+      const urlFromHash = params.get('upload_url')
+      if (urlFromHash) {
+        setUploadUrl(urlFromHash)
+      }
     }
-    getUser()
-  }, [])
+  }, [searchParams])
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     try {
+      if (!uploadUrl) {
+        throw new Error('No upload URL found. Please access this page from the app.')
+      }
+
       setUploading(true)
       setStatus('Uploading...')
 
@@ -29,95 +44,82 @@ export default function Home() {
       }
 
       const file = event.target.files[0]
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${Math.random()}.${fileExt}`
-      const filePath = `${fileName}`
 
-      // 1. Upload to Storage
-      const { error: uploadError } = await supabase.storage
-        .from('photos')
-        .upload(filePath, file)
+      // Perform simple PUT request to the signed URL
+      const response = await fetch(uploadUrl, {
+        method: 'PUT',
+        body: file,
+        headers: {
+          'Content-Type': file.type
+        }
+      })
 
-      if (uploadError) {
-        throw uploadError
+      if (!response.ok) {
+        throw new Error(`Upload failed with status: ${response.status}`)
       }
 
-      // 2. Get Public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('photos')
-        .getPublicUrl(filePath)
+      setStatus('Upload successful! You can close this window.')
+      setIsSuccess(true)
 
-      setImageUrl(publicUrl)
-
-      // 3. Save to Database
-      if (user) {
-        const { error: dbError } = await supabase
-          .from('user_photos')
-          .insert({
-            user_id: user.id,
-            image_url: publicUrl
-          })
-        if (dbError) throw dbError
-      }
-
-      setStatus('Upload successful!')
     } catch (error: any) {
       console.error(error)
-      setStatus('Error uploading image: ' + error.message)
+      setStatus('Error: ' + error.message)
     } finally {
       setUploading(false)
     }
   }
 
+  if (!uploadUrl) {
+    return (
+      <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4" role="alert">
+        <p className="font-bold">Missing Configuration</p>
+        <p>No upload URL detected. Please launch this page from the FlutterFlow app.</p>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen py-2">
-      <main className="flex flex-col items-center justify-center w-full flex-1 px-20 text-center">
-        <h1 className="text-4xl font-bold mb-8">
-          Welcome to Next.js App
-        </h1>
+    <div className="bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4">
+      <h2 className="text-xl font-bold mb-4">Upload Photo</h2>
 
-        {user ? (
-          <div className="bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4">
-            <div className="mb-4">
-              <p className="text-gray-700 text-sm font-bold mb-2">
-                Logged in as:
-              </p>
-              <p className="text-xl text-blue-600">
-                {user.email}
-              </p>
-            </div>
-
-            <div className="border-t pt-4 mt-4">
-              <h3 className="text-lg font-bold mb-4">Upload a Photo</h3>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleUpload}
-                disabled={uploading}
-                className="block w-full text-sm text-gray-500
+      {!isSuccess ? (
+        <div className="border-t pt-4 mt-4">
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleUpload}
+            disabled={uploading}
+            className="block w-full text-sm text-gray-500
                   file:mr-4 file:py-2 file:px-4
                   file:rounded-full file:border-0
                   file:text-sm file:font-semibold
                   file:bg-blue-50 file:text-blue-700
                   hover:file:bg-blue-100"
-              />
-              {uploading && <p className="mt-2 text-gray-500">Uploading...</p>}
-              {status && <p className="mt-2 text-red-500">{status}</p>}
-            </div>
+          />
+          {uploading && <p className="mt-2 text-gray-500">Uploading...</p>}
+        </div>
+      ) : (
+        <div className="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mt-4" role="alert">
+          <p className="font-bold">Success</p>
+          <p>Your photo has been uploaded securely.</p>
+        </div>
+      )}
 
-            {imageUrl && (
-              <div className="mt-4">
-                <p className="mb-2 font-bold">Uploaded Image:</p>
-                <img src={imageUrl} alt="Uploaded" className="max-w-xs mx-auto rounded shadow" />
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4" role="alert">
-            <p className="font-bold">Not Logged In</p>
-            <p>Please access this app from the FlutterFlow app to log in.</p>
-          </div>
-        )}
+      {status && !isSuccess && <p className={`mt-2 ${status.startsWith('Error') ? 'text-red-500' : 'text-blue-500'}`}>{status}</p>}
+    </div>
+  )
+}
+
+export default function Home() {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen py-2">
+      <main className="flex flex-col items-center justify-center w-full flex-1 px-20 text-center">
+        <h1 className="text-4xl font-bold mb-8">
+          Photo Uploader
+        </h1>
+        <Suspense fallback={<div>Loading...</div>}>
+          <UploadContent />
+        </Suspense>
       </main>
     </div>
   );
